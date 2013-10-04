@@ -1,0 +1,309 @@
+\documentclass[11pt, a4paper]{scrartcl}
+
+\usepackage[utf8]{inputenc}
+\usepackage{fancyvrb}
+\usepackage{hyperref}
+
+\begin{document}
+
+\addtolength{\parskip}{0.5em}
+\setlength{\parindent}{0em}
+
+\title{Working with PcoGui FITS files}
+\author{Kolja Glogowski}
+
+%\date{\today}
+\date{July 2, 2010}
+
+\maketitle
+
+\section{Overview}
+
+This text gives some hints on how to work with the FITS files that were created by the \emph{PcoGui} program. It describes how to handle file names containing timestamps in IDL and introduces some functions (IDL and Python) for extracting the frame ID (or frame number) and the timestamp from images that were created by the PCO 2000 or PCO 4000 cameras.
+
+This text and all scripts described in section~\ref{sec:pcoframe} are available online at:
+\begin{center}
+\url{http://www.kis.uni-freiburg.de/~kolja/camsys/}.
+\end{center}
+
+The IDL functions described in this text are already installed on the computer system at KIS.
+
+
+\section{How to handle file names in IDL}
+\label{sec:filenames}
+
+The \emph{PcoGui} software creates files with names like
+\begin{verbatim}
+    pco1_prefix_20101231-112233-123_suffix.fits
+\end{verbatim}
+containing the name of the camera, a prefix, the file creation date/time and a suffix. In general the naming scheme is given by
+\begin{verbatim}
+    [camera_][prefix_]YYYYMMDD-HHMMSS-ZZZ[_suffix].fits
+\end{verbatim}
+where the prefix and suffix can be optionally assigned by the user and the additional camera prefix is only added by the software if the name of the camera is known (e.g. \texttt{pco1} and \texttt{pco2} at the VTT).
+
+Working with files that have mandatory date and time fields in its name, may look a bit cumbersome at first, but it has some invaluable advantages compared to an ascending numbering scheme. For example:
+\begin{itemize}
+  \item Each file name is unique
+  \item You cannot accidentally overwrite an existing file
+  \item All files with the same prefix are ordered chronologically
+  \item You quickly determine the file's creation date and time by looking at its name
+\end{itemize}
+Aside from these benefits it isn't really that hard to work this kind of file names. In IDL you can use the function \texttt{FILE\_SEARCH} to generate a list of files by calling it with a suitable file name mask. In the mask you can use the wildcard '\texttt{*}' which stands for any number of arbitrary characters, or the wildcard '\texttt{?}' that is interpreted as exactly one arbitrary character.
+
+\subsection{A simple IDL example}
+If you have recorded many files into the same directory and want to access all files that were created on june 29th 2010 between 10:00 and 10:59 you can simply create a chronologically sorted list of files using the following IDL command:
+\begin{verbatim}
+    flist = file_search("*20100629-10*.fits")
+\end{verbatim}
+for every day in june 2010 between 9am and 10am the command would be:
+\begin{verbatim}
+    flist = file_search("*201006??-09*.fits")
+\end{verbatim}
+You can now chronologically access each file in this list using \texttt{flist[0]}, \texttt{flist[1]}, ... or by writing a loop like:
+\begin{verbatim}
+    for i = 0, n_elements(flist)-1 do print flist[i]
+\end{verbatim}
+
+\subsection{Another IDL example}
+Consider now the case that you have recorded some files in a first run with the file name prefix '\texttt{runa}' and some other files in a second run with the prefix '\texttt{runb}'. If we assume that all files contain one image with the dimension 1024x1024, then we can, for example, calculate the per-run-average of these images by the following code:
+\begin{verbatim}
+    flista = file_search("runa_*.fits")
+    flistb = file_search("runb_*.fits")
+    
+    a = fltarr(1024, 1024)
+    na = n_elements(flista)
+    for i = 0, na-1 do a += readfits(flista[i])
+    a /= na
+    
+    b = fltarr(1024, 1024)
+    nb = n_elements(flistb)
+    for i = 0, nb-1 do b += readfits(flistb[i])
+    b /= nb
+\end{verbatim}
+
+\subsection{Using sub-directories}
+If you want to group some previously recorded files which have all the same prefix/suffix (or no prefix/suffix at all), you can also use sub-directories to separate some of these files and use for example
+\begin{verbatim}
+    flista = file_search("seta/*.fits")
+    flistb = file_search("setb/*.fits")
+\end{verbatim}
+to create the file lists in IDL.
+
+
+\subsection{Sorting numbers}
+A common problem is, that you may have created many files with different prefixes, where you have used only one digit to enumerate the first 9 files and two digits for the following files, e.g.
+\begin{verbatim}
+    run1_, run2_, ..., run9_, run10_, run11_, ..., run20_
+\end{verbatim}
+In this case the command
+\begin{verbatim}
+    flist = file_search("run*.fits")
+\end{verbatim}
+would result in the alphabetically sorted list:
+\begin{verbatim}
+    run10_, run11_, ..., run19_, run1_, run20_, run2_, ..., run9_
+\end{verbatim}
+which is probably not the way you want these files to be ordered. To solve this, you can call \texttt{FILE\_SEARCH} twice and use the '\texttt{?}' and '\texttt{??}' wildcards respectively:
+\begin{verbatim}
+    flist = [file_search("run?_*.fits"), file_search("run??_*.fits")]
+\end{verbatim}
+This results in a list that is correctly ordered like the list at the beginning of this example.
+
+
+\section{Extracting frame numbers and timestamps from images}
+\label{sec:pcoframe}
+
+When recording images with the PCO 2000 or PCO 4000 camera, the camera can write the frame number and a timestamp into the first line(s) of the image data. The way these informations are written, can be set to \texttt{ASCII} (human readable text, using a couple of image lines), \texttt{BINARY} (BCD encoded, using only the first 24 pixels of the first line), both at the same time or none at all. Because this is the only way to determine the frame ID and the frame's creation time, the \emph{PcoGui} program always uses the \texttt{BINARY} or \texttt{ASCII+BINARY} mode. The \emph{CamWare} program on the other hand, allows the user to disable these informations or to use the \texttt{ASCII}-only mode.
+
+To extract the frame number or the frame's timestamp from IDL or Python you can use the IDL function \texttt{PCO\_FRAME\_ID} and \texttt{PCO\_FRAME\_TIME} or the Python functions \texttt{frame\_id()} and \texttt{frame\_time()} from the module \texttt{pcoframe}. The needed source files are available at
+\begin{center}
+\url{http://www.kis.uni-freiburg.de/~kolja/camsys/}.
+\end{center}
+If you have used the \emph{CamWare} program, this will of course only work, if you had enabled the \texttt{BINARY} or \texttt{ASCII+BINARY} mode.
+
+\subsection{Extracting frame numbers and timestamps using IDL}
+The IDL files needed are:
+\begin{verbatim}
+    pco_decode_bcd.pro
+    pco_frame_id.pro
+    pco_frame_time.pro
+\end{verbatim}
+The function \texttt{PCO\_DECODE\_BCD} is used by both other functions, so you need all three files. At KIS all files are already installed, so you only need to install them by yourself, if you want to use these functions with a local copy of IDL on your laptop.
+
+\subsubsection{Example}
+The following example IDL session shows how to extract frame informations from a FITS file that was recorded with the \emph{PcoGui} program:
+\begin{verbatim}
+  IDL> data = readfits("test_20100601-074713-343.fits")
+  IDL> help, data
+  DATA            INT       = Array[2048, 2048, 20]
+  IDL> print, pco_frame_id(data)
+           1         2         3         4         5         6
+           7         8         9        10        11        12
+          13        14        15        16        17        18
+          19        20
+  IDL> print, pco_frame_time(data[*, *, 0:4])
+        2010         6         1         7        47        11     159248
+        2010         6         1         7        47        11     611027
+        2010         6         1         7        47        12      62807
+        2010         6         1         7        47        12     514586
+        2010         6         1         7        47        12     966366
+  IDL> print, pco_frame_id(data[*, *, 19])  
+          20
+  IDL> print, pco_frame_time(data[*, *, 19])
+        2010         6         1          7       47        19     743057
+\end{verbatim}
+
+\subsubsection{Documentation}
+The following documentation was taken from the IDL files.
+
+\paragraph{pco\_frame\_id:}
+\begin{verbatim}
+  NAME:
+    PCO_FRAME_ID
+
+  PURPOSE:
+    This function extracts the frame number from images that were recorded
+    by the PCO 2000 or PCO 4000 camera.
+
+  INPUTS:
+    data:  An image (2d-array with dimension WxH), a collection of images
+           (3d-array with dimension WxHxN) or a single line (1d-array with
+           dimension W) which contains the bcd-encoded frame id.
+
+  KEYWORDS:
+    line:  The line of the image that contains the bcd-encoded data. The
+           default is the last line (H-axis) of the array.
+           If the frames were recorded by the PCO CamWare program, it may
+           be necessary to set this keyword to 0.
+    offs:  The offset (W-axis) to the beginning of the frame id bcd data.
+           The default value is 0.
+
+  OUTPUTS:
+    The frame id(s) of the input images.
+
+  NOTES:
+    To use this function, the images must be recorded with the timestamp mode
+    set to BINARY or BINARY+ASCII. This mode is always enabled for the
+    PcoGui but can be turned off when using the CamWare program.
+\end{verbatim}
+
+\paragraph{pco\_frame\_time:}
+\begin{verbatim}
+  NAME:
+    PCO_FRAME_TIME
+
+  PURPOSE:
+    This function extracts the date and time of recording from images that
+    were recorded by the PCO 2000 or PCO 4000 camera.
+
+  INPUTS:
+    data:  An image (2d-array with dimension WxH), a collection of images
+           (3d-array with dimension WxHxN) or a single line (1d-array with
+           dimension W) which contains the bcd-encoded frame id.
+
+  KEYWORDS:
+    line:  The line of the image that contains the bcd-encoded data. The
+           default is the last line (H-axis) of the array.
+           If the frames were recorded by the PCO CamWare program, it may
+           be necessary to set this keyword to 0.
+    offs:  The offset (W-axis) to the beginning of the date/time bcd data.
+           The default value is 4.
+
+  OUTPUTS:
+    The date and time when the input images were created. The format of each
+    line of the returned array is:
+
+        [ year, month, day, hour, minute, second, microsecond ]
+
+  NOTES:
+    To use this function, the images must be recorded with the timestamp mode
+    set to BINARY or BINARY+ASCII. This mode is always enabled for the
+    PcoGui but can be turned off when using the CamWare program.
+\end{verbatim}
+
+\clearpage
+\subsection{Extracting frame numbers and timestamps using Python}
+The Python module needed is \texttt{pcoframe.py}.
+
+\subsubsection{Example}
+The following example Python session shows how to extract frame informations from a FITS file that was recorded with the \emph{PcoGui} program:
+\begin{verbatim}
+  >>> import pyfits
+  >>> import pcoframe as pco
+  >>> data = pyfits.open("test_20100601-074713-343.fits")[0].data
+  >>> data.shape
+  (20, 2048, 2048)
+  >>> pco.frame_id(data)
+  array([ 1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17,
+         18, 19, 20], dtype=int32)
+  >>> pco.frame_time(data[0:5])
+  [datetime.datetime(2010, 6, 1, 7, 47, 11, 159248),
+   datetime.datetime(2010, 6, 1, 7, 47, 11, 611027),
+   datetime.datetime(2010, 6, 1, 7, 47, 12, 62807),
+   datetime.datetime(2010, 6, 1, 7, 47, 12, 514586),
+   datetime.datetime(2010, 6, 1, 7, 47, 12, 966366)]
+  >>> pco.frame_id(data[19])
+  20
+  >>> pco.frame_time(data[19])
+  datetime.datetime(2010, 6, 1, 7, 47, 19, 743057)
+\end{verbatim}
+
+
+\subsubsection{Documentation}
+The following documentation was taken from the source file.
+
+\paragraph{frame\_id(data, line=-1, offs=0):}
+\begin{verbatim}
+  This function extracts the frame number from images that were recorded
+  by the PCO 2000 or PCO 4000 camera.
+
+  Arguments:
+    data:  An image (2d-array with dimension WxH), a collection of images
+           (3d-array with dimension WxHxN) or a single line (1d-array with
+           dimension W) which contains the bcd-encoded frame id.
+    line:  The line of the image that contains the bcd-encoded data. The
+           default is the last line (H-axis) of the array.
+           If the frames were recorded by the PCO CamWare program, it may
+           be necessary to set this keyword to 0.
+    offs:  The offset (W-axis) to the beginning of the frame id bcd data.
+           The default value is 0.
+
+  Returns:
+    The frame id(s) of the input images. The type of the result is an
+    integer array (3d input-array) or an int value (2d input-array).
+  
+  Notes:
+    To use this function, the images must be recorded with the timestamp
+    mode set to BINARY or BINARY+ASCII. This mode is always enabled for
+    the PcoGui but can be turned off when using the CamWare program.
+\end{verbatim}
+
+\paragraph{frame\_time(data, line=-1, offs=4):}
+\begin{verbatim}
+  This function extracts the date and time of recording from images that
+  were recorded by the PCO 2000 or PCO 4000 camera.
+
+  Arguments:
+    data:  An image (2d-array with dimension WxH), a collection of images
+           (3d-array with dimension WxHxN) or a single line (1d-array with
+           dimension W) which contains the bcd-encoded frame id.
+    line:  The line of the image that contains the bcd-encoded data. The
+           default is the last line (H-axis) of the array.
+           If the frames were recorded by the PCO CamWare program, it may
+           be necessary to set this keyword to 0.
+    offs:  The offset (W-axis) to the beginning of the date/time bcd data.
+           The default value is 4.
+
+  Returns:
+    The date and time when the input images were created. The type of the
+    result is a list of datetime objects (3d input-array) or a single
+    datetime object (2d input-array).
+
+  Notes:
+    To use this function, the images must be recorded with the timestamp
+    mode set to BINARY or BINARY+ASCII. This mode is always enabled for
+    the PcoGui but can be turned off when using the CamWare program.
+\end{verbatim}
+
+\end{document}
